@@ -1,0 +1,156 @@
+trigger:
+  batch: false
+  branches:
+    include:
+      - master
+
+  paths:
+    include:
+      - deployments/services-cicd/azure-ci-cd-services/
+
+variables:
+  - template: variables/global.yml
+  - name: resourceGroupPrefix
+    value: advance-calculator
+  - name: resourceGroupName
+    value: $[ format('{0}-{1}', variables['resourceGroupPrefix'], variables['deploymentEnv']) ]
+  - group: TF-VG
+
+stages:
+  - stage: Build
+    jobs:
+      - job: Build_Packages
+        displayName: Build & package artifacts
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - script: ls -lrth *
+            displayName: List dir structure
+            
+          - task: CopyFiles@2
+            displayName: Stage template parameters
+            inputs:
+              SourceFolder: $(Build.SourcesDirectory)/deployment/services-cicd/azure-ci-cd-services/template-parameters
+              TargetFolder: $(Build.ArtifactStagingDirectory)
+
+  #         - task: ArtifactoryGenericUpload@3
+  #           displayName: "Upload Storage Account Templates"
+  #           inputs:
+  #             artifactoryService: $(artifactoryConnectionName)
+  #             specSource: taskConfiguration
+  #             failNoOp: true
+  #             fileSpec: |
+  #               {
+  #                 "files": [
+  #                   {
+  #                     "pattern": "examples/pipelines/solution-pipelines/services/template-parameters/storageacc/*.json",
+  #                     "target": "com-generic-local/com.cat.cloud.azure$(storageArtifactVersion)",
+  #                     "flat": "true"
+  #                   }
+  #                 ]
+  #               }
+  #             buildName: $(Build.DefinitionName)
+  #             buildNumber: $(Build.BuildId)
+          
+  #         - script: mkdir -p $(Build.ArtifactStagingDirectory)/downloaded
+  #           displayName: Create Download Directory
+
+          - task: CopyFiles@2
+            displayName: Download Artifactory Artifacts locally
+            inputs:
+              SourceFolder: $(Build.SourcesDirectory)/templates/storage
+              Contents: '**/*'  # Copies all files within the directory
+              TargetFolder: $(Build.ArtifactStagingDirectory)
+            
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish Artifactory Pipeline Artifacts
+            inputs:
+              path: $(Build.ArtifactStagingDirectory)
+              artifact: buildArtifacts
+
+  - stage: Dev
+    displayName: Dev
+    dependsOn: Build
+    variables:
+      - template: variables/dev.yml
+    jobs:
+      - deployment: Validate_Provision_Deploy
+        displayName: Validate & Provision Resources, Deploy Code
+        pool:
+          vmImage: ubuntu-latest
+        environment: ${{ variables['deploymentEnv'] }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureResourceGroupDeployment@2
+                  displayName: Validate Storage
+                  enabled: false
+                  inputs:
+                    azureSubscription: $(SubscriptionConnectionName)
+                    action: Create Or Update Resource Group
+                    resourceGroupName: $(resourceGroupName)
+                    location: $(location)
+                    templateLocation: Linked artifact
+                    csmFile: $(Pipeline.Workspace)/buildArtifacts/storagebasic.json
+                    csmParametersFile: $(Pipeline.Workspace)/buildArtifacts/$(deploymentEnv)/storageacc.param.json
+                    deploymentMode: Validation
+
+                - script: ls -lrth $(Pipeline.Workspace)/buildArtifacts/*
+                  displayName: List dir structure    
+
+                - task: AzureResourceGroupDeployment@2
+                  displayName: Provision Storage
+                  inputs:
+                    azureSubscription: $(SubscriptionConnectionName)
+                    action: Create Or Update Resource Group
+                    resourceGroupName: $(resourceGroupName)
+                    location: $(location)
+                    templateLocation: Linked artifact
+                    csmFile: $(Pipeline.Workspace)/buildArtifacts/storagebasic.json
+                    csmParametersFile: $(Pipeline.Workspace)/buildArtifacts/$(deploymentEnv)/storageacc.param.json
+                    deploymentMode: Incremental
+
+  - stage: Prod
+    displayName: Prod
+    dependsOn: Dev
+    variables:
+      - template: variables/prod.yml
+    jobs:
+      - deployment: Validate_Provision_Deploy
+        displayName: Validate & Provision Resources, Deploy Code
+        pool:
+          vmImage: ubuntu-latest
+        environment: ${{ variables['deploymentEnv'] }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureResourceGroupDeployment@2
+                  displayName: Validate Storage
+                  enabled: false
+                  inputs:
+                    azureSubscription: $(SubscriptionConnectionName)
+                    action: Create Or Update Resource Group
+                    resourceGroupName: $(resourceGroupName)
+                    location: $(location)
+                    templateLocation: Linked artifact
+                    csmFile: $(Pipeline.Workspace)/buildArtifacts/storagebasic.json
+                    csmParametersFile: $(Pipeline.Workspace)/buildArtifacts/$(deploymentEnv)/storageacc.param.json
+                    deploymentMode: Validation
+
+                - script: ls -lrth $(Pipeline.Workspace)/buildArtifacts/*
+                  displayName: List dir structure    
+
+                - task: AzureResourceGroupDeployment@2
+                  displayName: Provision Storage
+                  inputs:
+                    azureSubscription: $(SubscriptionConnectionName)
+                    action: Create Or Update Resource Group
+                    resourceGroupName: $(resourceGroupName)
+                    location: $(location)
+                    templateLocation: Linked artifact
+                    csmFile: $(Pipeline.Workspace)/buildArtifacts/storagebasic.json
+                    csmParametersFile: $(Pipeline.Workspace)/buildArtifacts/$(deploymentEnv)/storageacc.param.json
+                    deploymentMode: Incremental
